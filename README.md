@@ -2,7 +2,6 @@
 KPMG Phase 1 interview challenges
 
 
-# KPMG_Interview
 
 # Challenge  - 1
 
