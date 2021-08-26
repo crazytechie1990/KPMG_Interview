@@ -1,16 +1,16 @@
 # KPMG_Interview
-Solving KPMG Phase 1 interview challenges
+KPMG Phase 1 interview challenges
 
 
 # KPMG_Interview
 
-# Challenge #1
+# Challenge  - 1
 
 A 3 tier environment is a common setup. Use a tool of your choosing/familiarity create these resources.  
+## Response : used the recent experience where we migrated a customer's on prem infra to AWS Cloud.
 
-- Response : used the recent experience where we migrated a customer's on prem infra to AWS Cloud.
 
-# Challenge #2
+# Challenge  - 2
 
 Summary
 
