@@ -2,7 +2,6 @@
 KPMG Phase 1 interview challenges
 
 
-
 # Challenge - 1
 
 A 3 tier environment is a common setup. Use a tool of your choosing/familiarity create these resources.  
@@ -14,7 +13,7 @@ A 3 tier environment is a common setup. Use a tool of your choosing/familiarity 
 Summary
 
 We need to write code that will query the meta data of an instance within aws and provide a json formatted output. 
-
+#### Rather than using Python or another code I feel Ansible is more suitable and easy for such tasks. With ansible modules I have found it easy then writing python codes.
 
 # Challenge - 3
 
