@@ -1,3 +1,5 @@
+# Part
+
 module "network" {
     source = "D:\\CodingWorld\\AWSProjects\\UdemyDevOpsProject\\krishi-project\\krishi.link\\module\\network"
     krishi_vpc_cidr = "172.23.0.0/16"
