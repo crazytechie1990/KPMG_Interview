@@ -1,0 +1,31 @@
+---
+  pool:
+    vmImage: ubuntu-latest
+  
+  trigger: none
+
+  resources:
+      pipelines:
+      - pipeline: InfrastructurePipeline
+        source: InfrastructurePipeline
+        trigger: true 
+
+      repositories:
+      - repository: self
+      - repository: azdo-templates
+        type: git
+        name: SharedInfra/azdo-templates
+        ref: refs/tags/v1.11.1
+  
+  stages:
+  
+    - stage: Semantic_release
+      # condition: |
+      #     and(succeeded(), or(
+      #       eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+      #       eq(variables['Build.Reason'], 'PullRequest')     
+      #     ))
+      jobs:
+        - job: Semantic_release
+          steps: 
+            - template: step/semantic-release/template.yml@azdo-templates

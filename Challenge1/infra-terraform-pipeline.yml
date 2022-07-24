@@ -1,0 +1,287 @@
+name: $(TeamProject)_$(Build.DefinitionName)_$(SourceBranchName)_$(Date:ddMMyyyy).$(Rev:r) 
+
+trigger: none
+  # branches:
+  #   include:
+  #   - main
+  # paths:
+  #   include:
+  #   - app/stacks
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+resources:
+  repositories:
+  - repository: self
+  - repository: azdo-templates
+    type: git
+    name: SharedInfra/azdo-templates
+  - repository: azdo_pipeline_templates
+    type: git
+    name: SharedInfra/azdo_pipeline_templates
+    ref: refs/heads/sgs-ims/743879
+
+variables:
+      - group: self-hosted-agent-infra-preprod
+      - group: self-hosted-agent-infra-prod
+      - name: VAR_AZP_AGENT_NAME
+        value: dt-$(Build.BuildId)
+      - name: System.debug
+        value: false # debug
+      - name: AzureRegion
+        value: 'westeurope'
+
+
+parameters:
+  - name: ENVIRONMENTS
+    type: object
+    default:
+      # - environment: 'dev'
+      - environment: 'preprod'
+      - environment: 'prod'
+
+      
+stages:
+############################
+###Provision Build Agent  ##
+############################
+  - ${{ each item in parameters.ENVIRONMENTS }}:
+    - stage: create_agent_${{ item.environment }}
+      displayName: create_agent_${{ item.environment }}
+      variables: 
+          - group: self-hosted-agent-infra-${{ item.environment }}
+      pool:
+        vmImage: ubuntu-latest
+      jobs:
+        - job: deploy
+          displayName: deploy_aci
+          steps:
+            - template: self-host_agent/azr/shaazr_pipetemplate.yml@azdo_pipeline_templates
+              parameters:
+                deploy_agent: true
+                srvconnection: AMSAnywhereHub${{ item.environment }}
+                aci_resource_group: $(AZP_AZURE_ACI_RG)
+                aci_vnet: $(AZP_AZURE_ACI_VNET)
+                aci_subnet: $(AZP_AZURE_ACI_SUBNET)
+                aci_docker_image: $(AZP_AZURE_ACI_AZDO_IMAGE)
+                aci_registry_user: $(ACI_USER)
+                aci_registry_pass: $(ACI_PASS)
+                azp_url: $(AZP_URL)
+                azp_pool: $(AZP_POOL)
+                azp_agent_name: $(VAR_AZP_AGENT_NAME)
+                AZP_TOKEN: '$(AZP_TOKEN1)'
+
+################################################
+## Terraspace Validate, Graph, Plan and Test  ##
+################################################
+
+    - stage: terraspace_terraform_install_${{ item.environment }}
+      displayName: terraspace_terraform_install_${{ item.environment }}
+      pool:
+        name: $(AZP_POOL)
+        demands:
+          - agent.name -equals ${{ variables.VAR_AZP_AGENT_NAME }}
+      jobs:
+        - job: terraspace_installation
+          displayName: terraspace_installation
+          steps:
+            - template: step/terraspace-install/template.yml@azdo-templates
+
+
+################################################
+## Terraspace Validate, Graph, Plan and Test  ##
+################################################
+
+    - stage: terraspace_plan_validation_${{ item.environment }}
+      displayName: terraspace_plan_validation_${{ item.environment }}
+      pool:
+        name: $(AZP_POOL)
+        demands:
+          - agent.name -equals ${{ variables.VAR_AZP_AGENT_NAME }}
+      variables: 
+          - group: Digitaltwin-${{ item.environment }}
+      jobs:
+        - job: code_validation
+          displayName: code_validation_${{ item.environment }}
+          steps:
+            - task: InstallSSHKey@0
+              displayName: 'Install an SSH key'
+              inputs:
+                knownHostsEntry: $(knownHostsEntry)
+                sshPublicKey: $(sshPublicKey)
+                sshKeySecureFile: 'dt_infra'
+            
+            - task: charleszipp.azure-pipelines-tasks-terraform.azure-pipelines-tasks-terraform-installer.TerraformInstaller@0
+              displayName: Install Terraform  
+              inputs:
+                terraformVersion: 'latest'
+                 
+            - task: DownloadSecureFile@1
+              name: certificate_download
+              displayName: Dowload ${{ item.environment }} certificates
+              inputs:
+                secureFile: ${{ item.environment }}_dt_cert.pfx
+
+            - task: CopyFiles@2
+              inputs:
+                sourceFolder: $(Agent.TempDirectory)
+                contents: ${{ item.environment }}_dt_cert.pfx
+                targetFolder: $(Build.SourcesDirectory)/app/stacks/az_vault/
+                cleanTargetFolder: false
+                overWrite: true
+              
+            # Terraspace plan 
+            - template: step/terraspace-plan/template.yml@azdo-templates
+              parameters:
+                ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                ARM_TENANT_ID: $(ARM_TENANT_ID)
+                ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+                TS_ENV: '${{ item.environment }}'
+                ARM_LOCATION: $(AzureRegion)
+
+            - task: ArchiveFiles@2
+              condition: succeededOrFailed()
+              inputs:
+                rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+                archiveType: 'tar'
+                tarCompression: 'gz'
+                includeRootFolder: true
+                archiveFile: '$(Build.ArtifactStagingDirectory)/dt_${{ item.environment }}_plan.tgz'
+                replaceExistingArchive: false
+              displayName: 'Create Plan Artifact'
+
+            - task: PublishPipelineArtifact@1
+              condition: succeededOrFailed()
+              inputs:
+                targetPath: '$(Build.ArtifactStagingDirectory)'
+                artifactName: 'Terraform${{ item.environment }}PlanArtifacts' 
+              displayName: 'Publish Plan Artifact'
+            
+########################
+## Deploy Environment ##
+########################
+    - stage: deploy_infra_to_${{ item.environment }}
+      displayName: deploy_infra_to_${{ item.environment }}
+      pool:
+        name: $(AZP_POOL)
+        demands:
+          - agent.name -equals ${{ variables.VAR_AZP_AGENT_NAME }}
+      variables: 
+          - group: Digitaltwin-${{ item.environment }}
+      jobs:
+        - deployment: deploy_infra_to_${{ item.environment }}
+          displayName: deploy_infra_to_${{ item.environment }}
+          environment: dt-${{ item.environment }}
+          strategy:
+              runOnce:
+                deploy:
+                  steps:
+                      - checkout: self 
+                      - task: DownloadPipelineArtifact@2
+                        inputs:
+                          artifact: 'Terraform${{ item.environment }}PlanArtifacts' 
+                      - task: ExtractFiles@1
+                        inputs:
+                          archiveFilePatterns: '$(Pipeline.Workspace)/dt_${{ item.environment }}_plan.tgz'
+                          destinationFolder: '$(Pipeline.Workspace)'
+                          cleanDestinationFolder: false
+                          overwriteExistingFiles: true
+                        displayName: 'Extract Plan Artifact'
+                          
+                          # Terraspace install
+                      - template: step/terraspace-install/template.yml@azdo-templates
+                      
+                      - task: InstallSSHKey@0
+                        displayName: 'Install an SSH key'
+                        inputs:
+                          knownHostsEntry: $(knownHostsEntry)
+                          sshPublicKey: $(sshPublicKey)
+                          sshKeySecureFile: 'dt_infra'
+
+                      # Terraspace deploy dev stack for manual build / first time build
+                      - ${{ if eq(variables['Build.Reason'], 'Manual') }}:
+                        - task: Bash@3
+                          displayName: terraspace_deploy
+                          continueOnError: true
+                          inputs:
+                            workingDirectory: '$(System.DefaultWorkingDirectory)'
+                            targetType: 'inline'
+                            script: |  
+                              ls -ltr
+                              az login --service-principal --username $(ARM_CLIENT_ID) --password $(ARM_CLIENT_SECRET) --tenant $(ARM_TENANT_ID)
+                              az account set -s $(ARM_SUBSCRIPTION_ID)
+                              export ARM_LOCATION=$(AzureRegion)
+                              export TS_ENV=${{ item.environment }}
+                              export DT_RG="$(terraspace output az_rg | grep name | rev | awk -F' ' '{ print $1 }' | rev | sed 's/"//g')" || true
+                              export DT_AKS="$(az aks list -g `echo $DT_RG` | grep managedClusters | grep resourcegroups | rev | awk -F' ' '{ print $1 }' | sed 's/"//g' | sed 's/,//g' | awk -F'/' '{ print $1 }' | rev )" || true
+                              ARM_LOCATION=westeurope TS_ENV=${{ item.environment }} terraspace all up -y
+                          env:
+                            ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                            ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                            ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+                      
+                      # Terraspace deploy dev stack for CI build
+                      - ${{ if eq(variables['Build.Reason'], 'IndividualCI') }}:
+                        # Terraspace deploy 
+                        - template: step/terraspace-deploy/template.yml@azdo-templates
+                          parameters:
+                            ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                            ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                            ARM_TENANT_ID: $(ARM_TENANT_ID)
+                            ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+                            TS_ENV: '${{ item.environment }}'
+                            ARM_LOCATION: $(AzureRegion)  
+
+                    # Terraspace template for ACR integration
+                      - template: step/terraspace-output/template.yml@azdo-templates
+                        parameters:
+                          ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                          ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                          ARM_TENANT_ID: $(ARM_TENANT_ID)
+                          TS_ENV: '${{ item.environment }}'
+                          ARM_LOCATION: $(AzureRegion)
+                          STACK_NAME: 'az_aks'
+                          EXPRESSION_GREP: 'cluster_object_id'                       
+
+                      - task: ArchiveFiles@2
+                        condition: or(eq(variables['System.debug'], 'true'), succeededOrFailed())
+                        inputs:
+                          rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+                          archiveType: 'tar'
+                          tarCompression: 'gz'
+                          includeRootFolder: true
+                          archiveFile: '$(Build.ArtifactStagingDirectory)/dt_${{ item.environment }}_deploy.tgz'
+                          replaceExistingArchive: false
+                        displayName: 'Create Deploy Artifact'
+
+                      - task: PublishPipelineArtifact@1
+                        condition: or(eq(variables['System.debug'], 'true'), succeededOrFailed())
+                        inputs:
+                          targetPath: '$(Build.ArtifactStagingDirectory)'
+                          artifactName: 'Terraform${{ item.environment }}DeployArtifacts' 
+                        displayName: 'Publish Deploy Artifact'
+
+#########################
+##Destroy Build Agent  ##
+#########################
+    - stage: destroy_agent_${{ item.environment }}
+      condition: succeededOrFailed()
+      displayName: destroy_agent_${{ item.environment }}
+      variables: 
+          - group: self-hosted-agent-infra-${{ item.environment }}
+      pool:
+        vmImage: ubuntu-latest
+      jobs:
+        - job: deploy
+          displayName: Destroy Self-Hosted Agent
+          steps:
+            - template: self-host_agent/azr/shaazr_pipetemplate.yml@azdo_pipeline_templates
+              parameters:
+                destroy_agent: true
+                srvconnection: AMSAnywhereHub${{ item.environment }}
+                aci_resource_group: $(AZP_AZURE_ACI_RG)
+                azp_agent_name: $(VAR_AZP_AGENT_NAME)
+                azp_url: $(AZP_URL)
+                azp_pool: '$(AZP_POOL)'

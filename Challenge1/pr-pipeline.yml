@@ -1,0 +1,57 @@
+name: $(TeamProject)_$(Build.DefinitionName)_$(SourceBranchName)_$(Date:ddMMyyyy).$(Rev:r) 
+
+trigger: none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+resources:
+  repositories:
+  - repository: self
+  - repository: azdo-templates
+    type: git
+    name: SharedInfra/azdo-templates
+  - repository: azdo_pipeline_templates
+    type: git
+    name: SharedInfra/azdo_pipeline_templates
+    ref: refs/heads/sgs-ims/743879
+
+variables:
+      - group: digital-twin-variables
+      - name: self_hosted_agent_svc
+        value: AMSAnywhereHub
+
+stages:     
+###########################################
+## Terrascan formatting and validation   ##
+###########################################
+
+  - stage: terraspace_code_validation
+    displayName: terraspace_code_validation
+    jobs:
+      - job: terraspace_code_validation
+        steps: 
+         # Terraspace install
+          - template: step/terraspace-install/template.yml@azdo-templates
+          - task: InstallSSHKey@0
+            displayName: 'Install an SSH key'
+            inputs:
+              knownHostsEntry: $(knownHostsEntry)
+              sshPublicKey: $(sshPublicKey)
+              sshKeySecureFile: 'dt_infra'
+                
+          # Terraspace validate    
+          - task: Bash@3
+            displayName: terraspace_validate_plan
+            inputs:
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              targetType: 'inline'
+              script: |  
+                az login --service-principal --username $(ARM_CLIENT_ID) --password $(ARM_CLIENT_SECRET) --tenant $(ARM_TENANT_ID)
+                terraspace fmt -t all
+                ARM_LOCATION=westeurope TS_ENV=dev terraspace all init
+                ARM_LOCATION=westeurope TS_ENV=dev terraspace all validate
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
