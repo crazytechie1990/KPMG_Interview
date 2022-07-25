@@ -15,6 +15,11 @@ def get_running_instance_ids(ec2_client):
         }
     ]).get("Reservations")
 
+    """
+    Instances are associated with a reservation: >>> instances = reservations[0].instances >>> instances [Instance:i-00000000]
+    
+    """
+
     instance_ids = []
     for reservation in reservations:
         for instance in reservation["Instances"]:
